@@ -3,7 +3,7 @@ unit unif2d;
 interface
 
 uses
-  Types;
+  Math, Types;
 
 type
   bitpos = type ShortInt;
@@ -21,17 +21,11 @@ function AllocBoard(ASize: TPoint): PBoard;
 
 function Log2(X: UInt64): bitpos;
 
-procedure Map2n(L, T, R, B: UInt64; W, H: int32;
-  out X1, Y1, X2, Y2: UInt64; out Sb: bitpos);
-
 procedure FillBoard(XX, YY: UInt64; Sb: bitpos; out Board: TBoard; out VMin, VMax: UInt64);
 
 var
   World: UInt64 = 0;
 
-
-//todo remove
-function SqrtI(X: UInt64): UInt64; // inline; todo
 
 implementation
 
@@ -101,23 +95,9 @@ begin
   if A < B then Result := A else Result := B;
 end;
 
-// todo: seems to be fucked up
-procedure Map2n(L, T, R, B: UInt64; W, H: int32;
-  out X1, Y1, X2, Y2: UInt64; out Sb: bitpos);
-var
-  D: UInt64;
-begin
-  Sb := Min(Log2((R - L) div W), Log2((B - T) div H));
-  D := 1 shl Sb;
-  X1 := L and not (D - 1);
-  Y1 := T and not (D - 1);
-  X2 := (R-1) and not (D - 1) + D;
-  Y2 := (B-1) and not (D - 1) + D;
-end;
-
 
 type
-  TMemBlock = array[0..7] of UInt64; // todo: why not actual types
+  TMemBlock = array[0..7] of UInt64;
 
 procedure MemBlock(X, Y: UInt64; Sb: bitpos; out MB: TMemBlock);
 var
@@ -128,25 +108,6 @@ begin
   Key[2] := 0;
   Key[3] := 0;
   ChaChaR(Key, Int64(X), Int64(Y), MB, 5);
-end;
-
-const
-  MaxUInt64f: double = 65536.0*65536.0*65536.0*65536.0;
-  HalfMaxUInt64f: double = 32768.0*65536.0*65536.0*65536.0;
-
-procedure SplitWild(V, R1, R2, R3, R4: UInt64; out V1, V2, V3, V4: UInt64);
-begin
-  R1 := R1 shr 2 or $2000000000000000;
-  R2 := R2 shr 2 or $2000000000000000;
-  R3 := R3 shr 2 or $2000000000000000;
-  R4 := R4 shr 2 or $2000000000000000;
-
-  V1 := Round(R1 / (R1 + R2 + R3 + R4) * V);
-  V := V - V1;
-  V2 := Round(R2 / (R2 + R3 + R4) * V);
-  V := V - V2;
-  V3 := Round(R3 / (R3 + R4) * V);
-  V4 := V - V3;
 end;
 
 procedure Sort(var R1, R2: UInt64); inline;
@@ -160,6 +121,18 @@ begin
   end;
 end;
 
+procedure CorrectSum(V: UInt64; var V1, V2, V3, V4: UInt64; const R: UInt64); inline;
+begin
+  V := V - V1 - V2 - V3 - V4;
+  case R and 3 of
+    0: V1 := V1 + V;
+    1: V2 := V2 + V;
+    2: V3 := V3 + V;
+    3: V4 := V4 + V;
+  end;
+end;
+
+// calculates A * B / 2^64
 function M64(A, B: UInt64): UInt64; inline;
 type
   THL = packed record L, H: cardinal; end;
@@ -177,39 +150,21 @@ begin
               + UInt64(cardinal(AA.L * BB.L)) shr 31 ) shr 32;
 end;
 
-procedure CorrectSum(V: UInt64; var V1, V2, V3, V4: UInt64; const R: UInt64); inline;
+// calculates A / B * 2^64
+function D64(A, B: UInt64): UInt64; // inline;
 begin
-  V := V - V1 - V2 - V3 - V4;
-  case R and 3 of
-    0: V1 := V1 + V;
-    1: V2 := V2 + V;
-    2: V3 := V3 + V;
-    3: V4 := V4 + V;
-  end;
+
 end;
 
-procedure SplitWild2(V, R1, R2, R3, R4: UInt64; out V1, V2, V3, V4: UInt64);
+function Avg(const A, B: UInt64): UInt64; inline;
 begin
-  Sort(R1, R2);
-  Sort(R2, R3);
-  Sort(R1, R2);
-
-  V1 := M64(V, R1);
-  V2 := M64(V, R2 - R1);
-  V3 := M64(V, R3 - R2);
-  V4 := M64(V, $FFFFFFFFFFFFFFFF - R3);
-
-  CorrectSum(V, V1, V2, V3, V4, R4);
+  Result := A shr 1 + B shr 1 + Cardinal(A) and Cardinal(B) and 1;
 end;
 
-function SqrtI(X: UInt64): UInt64; //inline; todo
+function SqrtI(X: UInt64): UInt64; inline;
 var
   b: UInt64;
 begin
-{  Result := ( UInt64(1) shl (Log2(X) shr 1) + X shr (Log2(X) shr 1) ) shr 1;
-  Result := (Result + X div Result) shr 1;
-}
-
   Result := 0;
   b := UInt64(1) shl (Log2(X) and not 1);
 
@@ -222,6 +177,20 @@ begin
 
     b := b shr 2;
   end;
+end;
+
+procedure SplitWild(V, R1, R2, R3, R4: UInt64; out V1, V2, V3, V4: UInt64);
+begin
+  Sort(R1, R2);
+  Sort(R2, R3);
+  Sort(R1, R2);
+
+  V1 := M64(V, R1);
+  V2 := M64(V, R2 - R1);
+  V3 := M64(V, R3 - R2);
+  V4 := M64(V, $FFFFFFFFFFFFFFFF - R3);
+
+  CorrectSum(V, V1, V2, V3, V4, R4);
 end;
 
 procedure SplitUnif(V: UInt64; const R: TMemBlock; out V1, V2, V3, V4: UInt64);
@@ -261,19 +230,100 @@ begin
   end;
 end;
 
+{function F(X, Y: UInt64): double;
+var
+  Xf, Yf: double;
+const
+  scale = 1e7;
+begin   // integ 1/r^3:  -sqrt(x^2+y^2)/(x y)
+  Xf := X / scale - scale/2.0;
+  Yf := Y / scale - scale/2.0;
+  Result := -Sqrt(Xf*Xf+Yf*Yf) / Xf / Yf;
+end;}
+
+function F(X, Y: UInt64): double; // inline;
+var
+  F: double;
+  XS: Int64 absolute X;
+  YS: Int64 absolute Y;
+begin
+  F := Int64(1) shl 63;
+  F := F + XS;
+  Result := ArcTan(F * 1e-10);
+  F := YS;
+  F := F + Int64(1) shl 63;
+  Result := Result * ArcTan(F * 1e-10);
+end;
+
+procedure SplitR(V: UInt64; const R: TMemBlock; const Xmin, Xmax, Ymin, Ymax: UInt64;
+  out V1, V2, V3, V4: UInt64);
+var
+  Q, S1, S2, S3, S4, Xmid, Ymid: UInt64;
+  VS, VTR, VBR, VTL, VBL, TM, LM, RM, BM, MM: double;
+  i: integer;
+const
+  MaxUInt64f = 65536.0*65536.0*65536.0*65536.0 - 1;
+begin
+  if V < 32 then begin
+    V1 := 0;  V2 := 0;  V3 := 0;  V4 := 0;
+    for i := 0 to V - 1 do begin
+      case R[0] shr (i*2) and 3 of
+        0: V1 := V1 + 1;
+        1: V2 := V2 + 1;
+        2: V3 := V3 + 1;
+        3: V4 := V4 + 1;
+      end;
+    end;
+  end else begin
+    Xmid := Avg(Xmin, Xmax);
+    Ymid := Avg(Ymin, Ymax);
+    TM := F(Xmid, Ymin);
+    BM := F(Xmid, Ymax);
+    LM := F(Xmin, Ymid);
+    RM := F(Xmax, Ymid);
+    MM := F(Xmid, Ymid);
+    VTR := RM + TM - F(Xmax, Ymin) - MM;
+    VBR := F(Xmax, Ymax) - RM - BM + MM;
+    VTL := MM - TM - LM + F(Xmin, Ymin);
+    VBL := BM - MM - F(Xmin, Ymax) + LM;
+
+    if VTR < 0 then VTR := 0;
+    if VBR < 0 then VBR := 0;
+    if VTL < 0 then VTL := 0;
+    if VBL < 0 then VBL := 0;
+
+    VS := VTR + VBR + VTL + VBL;
+
+    // todo: rewrite to
+    // todo: add some random
+    if VS = 0 then begin
+      V1 := V shr 2;
+      V2 := V shr 2;
+      V3 := V shr 2;
+      V4 := V shr 2;
+    end else begin
+      V1 := M64(V, Trunc(VTL / VS * MaxUInt64f / 2.0) shl 1);
+      V2 := M64(V, Trunc(VTR / VS * MaxUInt64f / 2.0) shl 1);
+      V3 := M64(V, Trunc(VBL / VS * MaxUInt64f / 2.0) shl 1);
+      V4 := M64(V, Trunc(VBR / VS * MaxUInt64f / 2.0) shl 1);
+    end;
+
+    CorrectSum(V, V1, V2, V3, V4, R[3]);
+  end;
+end;
 
 procedure Split(const V: UInt64; const R: TMemBlock; const Xmin, Xmax, Ymin, Ymax: UInt64;
   out V1, V2, V3, V4: UInt64);
 begin
 //  SplitWild2(V, R[0], R[1], R[2], R[3], V1, V2, V3, V4);
-//  SplitWild(V, R[0], R[1], R[2], R[3], V1, V2, V3, V4);
-  SplitUnif(V, R, V1, V2, V3, V4);
+//  SplitUnif(V, R, V1, V2, V3, V4);
+  SplitR(V, R, Xmin, Xmax, Ymin, Ymax, V1, V2, V3, V4);
 end;
 
 procedure FillBoard(XX, YY: UInt64; Sb: bitpos; out Board: TBoard; out VMin, VMax: UInt64);
 var
   b: bitpos;
-  X, Y, Xmin, Xmax, Ymin, Ymax, S00, S01, S10, S11: UInt64;
+  X, Y, X2, Y2, Xmin, Xmax, Ymin, Ymax, S00, S01, S10, S11: UInt64;
   Xd, Yd, Xo, Yo, Xn, Yn: integer;
   S: TMemBlock;
 begin
@@ -293,9 +343,11 @@ begin
       for Yo := Yd downto 0 do begin
         X := (Xo + Xmin) shl b shl 1;
         Y := (Yo + Ymin) shl b shl 1;
+        X2 := (Xo + Xmin + 1) shl b shl 1 - 1;
+        Y2 := (Yo + Ymin + 1) shl b shl 1 - 1;
 
         MemBlock(X, Y, b, S);
-        Split(Board.At[Xo, Yo], S, Xmin, Xmax, Ymin, Ymax, S00, S01, S10, S11);
+        Split(Board.At[Xo, Yo], S, X, X2, Y, Y2, S00, S01, S10, S11);
 
         if Vmax < S00 then Vmax := S00;
         if Vmax < S01 then Vmax := S01;

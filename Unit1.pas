@@ -308,7 +308,7 @@ begin
   Image.Picture.Bitmap.PixelFormat := pf32bit;
   X := $2000000000000000;
   Y := $2000000000000000;
-  b := 40;
+  b := 54;
   bf := 0;
   Draw;
 
